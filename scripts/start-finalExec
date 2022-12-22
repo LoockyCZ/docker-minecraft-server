@@ -3,6 +3,31 @@
 : "${DEBUG_EXEC:=false}"
 : "${SETUP_ONLY:=false}"
 
+prep_term() {
+    unset term_child_pid
+    unset term_kill_needed
+    trap 'handle_term' TERM INT
+}
+
+handle_term() {
+    if [ "${term_child_pid}" ]; then
+        /auto/resume.sh term
+        kill -TERM "${term_child_pid}" 2>/dev/null
+    else
+        term_kill_needed="yes"
+    fi
+}
+
+wait_term() {
+    term_child_pid=$!
+    if [ "${term_kill_needed}" ]; then
+        kill -TERM "${term_child_pid}" 2>/dev/null 
+    fi
+    wait ${term_child_pid} 2>/dev/null
+    trap - TERM INT
+    wait ${term_child_pid} 2>/dev/null
+}
+
 # shellcheck source=start-utils
 . "${SCRIPTS:-/}start-utils"
 isDebugging && set -x
@@ -226,7 +251,9 @@ if [[ ${TYPE} == "CURSEFORGE" && "${SERVER}" ]]; then
   if isTrue "${DEBUG_EXEC}"; then
     set -x
   fi
-  exec mc-server-runner ${bootstrapArgs} "${mcServerRunnerArgs[@]}" java $JVM_XX_OPTS $JVM_OPTS $expandedDOpts -jar "$(basename "${SERVER}")" "$@" $EXTRA_ARGS
+  prep_term
+  mc-server-runner ${bootstrapArgs} "${mcServerRunnerArgs[@]}" java $JVM_XX_OPTS $JVM_OPTS $expandedDOpts -jar "$(basename "${SERVER}")" "$@" $EXTRA_ARGS &
+  wait_term
 elif [[ ${TYPE} == "CURSEFORGE" ]]; then
   mcServerRunnerArgs+=(--shell bash)
 
@@ -259,7 +286,9 @@ EOF
   if isTrue "${EXEC_DIRECTLY:-false}"; then
     "${finalArgs[@]}"
   else
-    exec mc-server-runner "${mcServerRunnerArgs[@]}" "${finalArgs[@]}"
+    prep_term
+    mc-server-runner "${mcServerRunnerArgs[@]}" "${finalArgs[@]}" &
+    wait_term
   fi
 elif [[ $SERVER =~ run.sh ]]; then
   log "Using Forge supplied run.sh script..."
@@ -268,7 +297,9 @@ elif [[ $SERVER =~ run.sh ]]; then
     echo "SETUP_ONLY: bash ${SERVER}"
     exit
   fi
-  exec mc-server-runner "${mcServerRunnerArgs[@]}" --shell bash "${SERVER}"
+  prep_term
+  mc-server-runner "${mcServerRunnerArgs[@]}" --shell bash "${SERVER}" &
+  wait_term
 else
   # If we have a bootstrap.txt file... feed that in to the server stdin
   if [ -f /data/bootstrap.txt ]; then
@@ -296,9 +327,12 @@ else
   fi
 
   if isTrue "${EXEC_DIRECTLY:-false}"; then
-    exec java "${finalArgs[@]}"
+    prep_term
+    java "${finalArgs[@]}" &
+    wait_term
   else
-    exec mc-server-runner ${bootstrapArgs} "${mcServerRunnerArgs[@]}" java "${finalArgs[@]}"
+    prep_term
+    mc-server-runner ${bootstrapArgs} "${mcServerRunnerArgs[@]}" java "${finalArgs[@]}" &
+    wait_term
   fi
 fi
-
